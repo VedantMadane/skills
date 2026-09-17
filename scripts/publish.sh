@@ -5,8 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 GENERATED_FILES=(
-  "agents/AGENTS.md"
+  "agentsmd/AGENTS.md"
   "README.md"
+  ".claude-plugin/marketplace-internal.json"
   ".cursor-plugin/plugin.json"
   ".mcp.json"
 )
@@ -25,18 +26,36 @@ run_generate() {
   uv run scripts/generate_cursor_plugin.py
 }
 
+default_base_ref() {
+  if [[ -n "${PUBLISH_BASE_REF:-}" ]]; then
+    echo "$PUBLISH_BASE_REF"
+  elif git rev-parse --verify --quiet origin/main >/dev/null; then
+    echo "origin/main"
+  else
+    echo "main"
+  fi
+}
+
+run_publish() {
+  local base_ref
+  base_ref="$(default_base_ref)"
+  uv run scripts/plugin_versions.py bump-if-needed "$base_ref"
+  run_generate
+}
+
 run_check() {
-  declare -A before
+  local before=()
   local changed=()
 
   for path in "${GENERATED_FILES[@]}"; do
-    before["$path"]="$(file_sig "$path")"
+    before+=("$(file_sig "$path")")
   done
 
   run_generate
 
-  for path in "${GENERATED_FILES[@]}"; do
-    if [[ "${before[$path]}" != "$(file_sig "$path")" ]]; then
+  for i in "${!GENERATED_FILES[@]}"; do
+    local path="${GENERATED_FILES[$i]}"
+    if [[ "${before[$i]}" != "$(file_sig "$path")" ]]; then
       changed+=("$path")
     fi
   done
@@ -54,13 +73,14 @@ run_check() {
 
   # Extra explicit check for cursor-only artifacts
   uv run scripts/generate_cursor_plugin.py --check
+  uv run scripts/plugin_versions.py check
 
   echo "All generated artifacts are up to date."
 }
 
 case "${1:-}" in
   "")
-    run_generate
+    run_publish
     echo "Publish artifacts generated successfully."
     ;;
   "--check")
@@ -72,11 +92,16 @@ Usage:
   ./scripts/publish.sh         Generate all publish artifacts
   ./scripts/publish.sh --check Verify generated artifacts are up to date
 
+Set PUBLISH_BASE_REF to override the base used for automatic version bumps.
+
 This script regenerates:
-  - agents/AGENTS.md
+  - agentsmd/AGENTS.md
   - README.md (skills table section)
+  - .claude-plugin/marketplace-internal.json
   - .cursor-plugin/plugin.json
   - .mcp.json
+
+Versioned manifests are validated with scripts/plugin_versions.py.
 EOF
     ;;
   *)
